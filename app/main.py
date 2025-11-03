@@ -10,6 +10,14 @@ import cloudinary
 # Import models to register them with SQLAlchemy
 from app.models.user import User
 from app.models.otp import OTP
+from app.models.project import Project
+from app.models.project_invite import ProjectInvite
+from app.models.project_member import ProjectMember
+from app.models.task import Task
+from app.models.subtask import SubTask
+from app.models.comment import Comment
+from app.models.task_assignee import TaskAssignee
+from app.models.notification import Notification
 
 # This will migrate model into database
 Base.metadata.create_all(bind=engine)

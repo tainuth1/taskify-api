@@ -6,6 +6,7 @@ import uuid
 
 class User(Base):
     __tablename__ = "users"
+    passive_deletion = True
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     email = Column(String(255), unique=True, index=True, nullable=False)
