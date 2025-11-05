@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_, and_
 
 from app.core.config import settings
-from app.schemas.project import ProjectCreate, ProjectResponse, ProjectDetailResponse
+from app.schemas.project import ProjectCreate, ProjectResponse, ProjectDetailResponse, ProjectUpdate
 from app.schemas.user import User as UserSchema
 from app.models import Project as ProjectModel, ProjectMember, User
 from app.models.project import ProjectType as ProjectTypeModel
@@ -76,6 +76,7 @@ class ProjectController:
 
         return project_response
 
+    # Hellper method
     def _check_project_access(self, user_id: str, project_id: str) -> bool:
         """Check if user has access to a project.
         
@@ -101,6 +102,7 @@ class ProjectController:
         else:
             return member is not None
 
+    # Hellper method
     def _get_user_project_role(self, user_id: str, project_id: str) -> MemberRole | None:
         """Get user's role in a project, or None if no access."""
         member = (
@@ -128,6 +130,8 @@ class ProjectController:
         # Join projects with project_members to find all projects for this user (active membership)
         # Personal projects: only show if user is owner
         # Group projects: show if user is any active member
+        # return personal project when user is owner
+        # and return group project when user is an active members
         projects = (
             self.db.query(ProjectModel)
             .join(ProjectMember, ProjectMember.project_id == ProjectModel.id)
@@ -150,7 +154,7 @@ class ProjectController:
         if not projects:
             return []
 
-        # Fetch all members for these projects in bulk
+        # Fetch all members for these projects in bulk to get all members for all projects
         project_ids = {p.id for p in projects}
         member_rows = (
             self.db.query(ProjectMember)
@@ -182,10 +186,6 @@ class ProjectController:
         return responses
 
     def get_project_by_id(self, token: str, project_id: str) -> ProjectDetailResponse:
-        """Get a single project by ID with full details.
-        
-        Raises ValueError if project not found or access denied.
-        """
         try:
             payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         except ExpiredSignatureError:
@@ -253,3 +253,130 @@ class ProjectController:
         )
         
         return project_detail
+
+    def update_project(self, updated_project: ProjectUpdate, token: str)-> ProjectResponse:
+        try:
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        except ExpiredSignatureError:
+            raise ValueError("Token has expired")
+        except JWTError:
+            raise ValueError("Invalid token")
+
+        if payload.get("type") != "access":
+            raise ValueError("Invalid token type")
+        
+        user_id = payload.get("sub")
+
+        project = self.db.query(ProjectModel).filter(ProjectModel.id == updated_project.id).first()
+        if not project:
+            raise ValueError("Project not found")
+
+        # Get user's role in the project
+        user_role = self._get_user_project_role(user_id, str(updated_project.id))
+        # Check if user has permission (owner or admin only)
+        if not user_role or user_role not in [MemberRole.owner, MemberRole.admin]:
+            raise ValueError("Only owners and admins can update projects")
+
+        # Update only provided fields
+        if updated_project.name is not None:
+            project.name = updated_project.name
+        
+        if updated_project.description is not None:
+            project.description = updated_project.description
+
+        # Enable if allow to update project type: Not Recommanded
+        # if updated_project.type is not None:
+        #     project_type = ProjectTypeModel.personal
+        #     if updated_project.type.value == "group":
+        #         project_type = ProjectTypeModel.group
+        #     project.type = project_type
+
+        self.db.commit()
+        self.db.refresh(project)
+
+        # Fetch all members for this project
+        member_rows = (
+            self.db.query(ProjectMember)
+            .filter(ProjectMember.project_id == project.id)
+            .filter(ProjectMember.status == MemberStatus.active)
+            .all()
+        )
+        
+        # Load all users referenced by members
+        user_ids = {str(m.user_id) for m in member_rows}
+        users = self.db.query(User).filter(User.id.in_(user_ids)).all()
+        user_map = {str(u.id): u for u in users}
+        
+        # Build members list
+        members_payload: list[dict] = []
+        for m in member_rows:
+            u = user_map.get(str(m.user_id))
+            if not u:
+                continue
+            entry = {"user": UserSchema.model_validate(u), "role": m.role.value}
+            members_payload.append(entry)
+        
+        # Convert project type enum for schema
+        from app.schemas.project import ProjectType as ProjectTypeSchema
+        project_type = ProjectTypeSchema.personal if project.type == ProjectTypeModel.personal else ProjectTypeSchema.group
+        
+        # Build response
+        project_response = ProjectResponse(
+            id=project.id,
+            name=project.name,
+            description=project.description,
+            type=project_type,
+            owner_id=project.owner_id,
+            members=members_payload,
+            created_at=project.created_at,
+            updated_at=project.updated_at,
+        )
+        
+        return project_response
+
+    def delete_project(self, token: str, project_id: str) -> dict:
+        """Delete a project. Only the owner can delete it.
+        
+        Raises ValueError if project not found, access denied, or insufficient permissions.
+        Returns a success message with project details before deletion.
+        """
+        try:
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        except ExpiredSignatureError:
+            raise ValueError("Token has expired")
+        except JWTError:
+            raise ValueError("Invalid token")
+        
+        if payload.get("type") != "access":
+            raise ValueError("Invalid token type")
+
+        user_id = payload.get("sub")
+        project = self.db.query(ProjectModel).filter(ProjectModel.id == project_id).first()
+        if not project:
+            raise ValueError("Project not found")
+        
+        # Verify user is the owner (only owner can delete)
+        if str(project.owner_id) != user_id:
+            raise ValueError("Only the project owner can delete the project")
+        
+        # Double-check: Verify user has owner role in project_members table
+        # This ensures consistency between project.owner_id and project_members
+        user_role = self._get_user_project_role(user_id, project_id)
+        if not user_role or user_role != MemberRole.owner:
+            raise ValueError("Only the project owner can delete the project")
+        
+        # Store project info for response before deletion
+        project_info = {
+            "id": str(project.id),
+            "name": project.name,
+            "type": project.type.value if hasattr(project.type, 'value') else str(project.type)
+        }
+        
+        # Delete the project (CASCADE will handle project_members, tasks, etc.)
+        self.db.delete(project)
+        self.db.commit()
+        
+        return {
+            "message": "Project deleted successfully",
+            "deleted_project": project_info
+        }

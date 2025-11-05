@@ -5,7 +5,7 @@ import uuid
 from app.controllers.project_controller import ProjectController
 from app.core.config import settings
 from app.database import get_db
-from app.schemas.project import Project, ProjectCreate, ProjectResponse, ProjectDetailResponse
+from app.schemas.project import Project, ProjectCreate, ProjectResponse, ProjectDetailResponse, ProjectUpdate
 
 router = APIRouter()
 
@@ -71,6 +71,60 @@ def get_project_by_id(request: Request, project_id: uuid.UUID, db: Session = Dep
         if "not found" in error_message.lower():
             raise HTTPException(status_code=404, detail=error_message)
         elif "access denied" in error_message.lower():
+            raise HTTPException(status_code=403, detail=error_message)
+        else:
+            raise HTTPException(status_code=401, detail=error_message)
+
+@router.patch("/projects/{project_id}", status_code=200, description="Update a project (partial)")
+def update_project(request: Request, project_id: uuid.UUID, payload: ProjectUpdate = Body(...), db: Session = Depends(get_db)):
+    controller = ProjectController(db)
+    token: str | None = None
+
+    token = request.cookies.get(settings.ACCESS_TOKEN_COOKIE_NAME)
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing access token")
+    # Ensure the project_id in path matches the payload (Optional but recommand for this code structure)
+    if payload.id != project_id:
+        raise HTTPException(status_code=400, detail="Project ID in path does not match payload")
+    
+    try:
+        project_data = controller.update_project(payload, token)
+        project_out = ProjectResponse.model_validate(project_data)
+        return {
+            "success": True,
+            "message": "Update project successfully",
+            "data": project_out.model_dump(mode="json")
+        }
+    except ValueError as e:
+        error_message = str(e)
+        if "not found" in error_message.lower():
+            raise HTTPException(status_code=404, detail=error_message)
+        elif "access denied" in error_message.lower() or "only owners and admins" in error_message.lower():
+            raise HTTPException(status_code=403, detail=error_message)
+        else:
+            raise HTTPException(status_code=401, detail=error_message)
+
+@router.delete("/projects/{project_id}", status_code=200, description="Delete a project")
+def delete_project(request: Request, project_id: uuid.UUID, db: Session = Depends(get_db)):
+    controller = ProjectController(db)
+    token: str | None = None
+
+    token = request.cookies.get(settings.ACCESS_TOKEN_COOKIE_NAME)
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing access token")
+
+    try:
+        result = controller.delete_project(token, str(project_id))
+        return {
+            "success": True,
+            "message": result["message"],
+            "data": result["deleted_project"]
+        }
+    except ValueError as e:
+        error_message = str(e)
+        if "not found" in error_message.lower():
+            raise HTTPException(status_code=404, detail=error_message)
+        elif "only the project owner" in error_message.lower() or "access denied" in error_message.lower():
             raise HTTPException(status_code=403, detail=error_message)
         else:
             raise HTTPException(status_code=401, detail=error_message)

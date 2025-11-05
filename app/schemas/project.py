@@ -26,7 +26,7 @@ class ProjectCreate(ProjectBase):
 
 
 class ProjectUpdate(ProjectBase):
-    id: uuid.UUID
+    id: Optional[uuid.UUID] = None
     name: Optional[str] = None
     description: Optional[str] = None
     type: Optional[ProjectType] = None
