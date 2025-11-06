@@ -9,6 +9,7 @@ class InviteStatus(enum.Enum):
     pending = "pending"
     accepted = "accepted"
     rejected = "rejected"
+    expired = "expired"
 
 class ProjectInvite(Base):
     __tablename__ = "project_invites"
@@ -19,7 +20,7 @@ class ProjectInvite(Base):
     invited_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     status = Column(SqlEnum(InviteStatus, name="invite_status"), nullable=False, default=InviteStatus.pending)
     token = Column(String(255), unique=True, nullable=False, index=True)
-    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    expired_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     
     # PostgreSQL Database
     DATABASE_URL: Optional[str] = None
+
+    # Front-End URL:
+    FRONTEND_URL: str = "http://localhost:3000"
     
     # JWT
     SECRET_KEY: Optional[str] = None
