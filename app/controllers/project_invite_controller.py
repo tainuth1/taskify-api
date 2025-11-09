@@ -1,16 +1,16 @@
-from jose import JWTError, jwt
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 from sqlalchemy import and_
 from datetime import datetime, timedelta
 import secrets
-import uuid
 from datetime import timezone
 
 from app.core.config import settings
 from app.models import ProjectInvite, ProjectMember, User, Project
 from app.models.project_invite import InviteStatus
-from app.models.project_member import MemberStatus
+from app.models.project_member import MemberRole, MemberStatus
 from app.core.email import sent_email_brevo
+from app.schemas.user import User as UserSchema
+from app.schemas.project import Project as ProjectSchema
 
 class ProjectInviteController:
     def __init__(self, db: Session):
@@ -119,3 +119,180 @@ class ProjectInviteController:
             subject=f"Invitation to join {project.name}",
             html_content=html_content
         )
+
+    def accept_invite(self, token: str, user_id: str) -> ProjectMember:
+        """Accept an invitation. User must be authenticated."""
+        print(token)
+        invite = (
+            self.db.query(ProjectInvite)
+            .filter(ProjectInvite.token == token)
+            .first()
+        )
+
+        if not invite:
+            raise ValueError("Invalid invitation token")
+
+        if invite.status != InviteStatus.pending:
+            raise ValueError(f"Invitation already {invite.status.value}")
+        
+        if invite.expired_at and invite.expired_at.replace(tzinfo=None) < datetime.utcnow():
+            invite.status = InviteStatus.expired
+            self.db.commit()
+            raise ValueError("Invitation has expired")
+
+        # Verify user email matches invite email
+        user = self.db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise ValueError("User not found")
+
+        # Check if already a member (edge case)
+        existing_member = (
+            self.db.query(ProjectMember)
+            .filter(
+                and_(
+                    ProjectMember.project_id == invite.project_id,
+                    ProjectMember.user_id == user_id,
+                    ProjectMember.status == MemberStatus.active
+                )
+            )
+            .first()
+        )
+        if existing_member:
+            # Update invite status but don't create duplicate member
+            invite.status = InviteStatus.accepted
+            self.db.commit()
+            return existing_member
+
+        # Create project member (default role: member, can be customized)
+        project_member = ProjectMember(
+            user_id=user_id,
+            project_id=invite.project_id,
+            role=MemberRole.member,
+            status=MemberStatus.active
+        )
+        self.db.add(project_member)
+
+        # Update invite status
+        invite.status = InviteStatus.accepted
+
+        self.db.commit()
+        self.db.refresh(project_member)
+        
+        return project_member
+
+    def reject_invite(self, token: str, user_id: str) -> ProjectInvite:
+        """Reject an invitation. User must be authenticated."""
+
+        invite = (
+            self.db.query(ProjectInvite)
+            .filter(ProjectInvite.token == token)
+            .first()
+        )
+        if not invite:
+            raise ValueError("Invalid invitation token")
+
+        if invite.status != InviteStatus.pending:
+            raise ValueError(f"Invitation already {invite.status.value}")
+
+        # Verify user email matches invite email
+        user = self.db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise ValueError("User not found")
+
+        if user.email.lower() != invite.email.lower():
+            raise ValueError("This invitation is for a different email address")
+
+        invite.status = InviteStatus.rejected
+        self.db.commit()
+        self.db.refresh(invite)
+        
+        return invite
+
+    def get_invite_by_token(self, token: str) -> dict:
+        """Get invitation details by token (for unauthenticated users).
+        Returns a dictionary with invite details, project info, and inviter info.
+        """
+        Inviter = aliased(User)
+        ProjectOwner = aliased(User)
+        
+        result = (
+            self.db.query(ProjectInvite, Project, Inviter, ProjectOwner)
+            .join(Project, ProjectInvite.project_id == Project.id)
+            .join(Inviter, ProjectInvite.invited_by == Inviter.id)
+            .join(ProjectOwner, Project.owner_id == ProjectOwner.id)
+            .filter(ProjectInvite.token == token)
+            .first()
+        )
+        
+        if not result:
+            raise ValueError("Invalid invitation token")
+        
+        invite, project, inviter, project_owner = result
+        
+        # Check if the invited email already has an account
+        invited_user = self.db.query(User).filter(User.email == invite.email).first()
+        user_exists = invited_user is not None
+        
+        return {
+            "id": str(invite.id),
+            "token": invite.token,
+            "email": invite.email,
+            "status": invite.status.value,
+            "expired_at": invite.expired_at.isoformat() if invite.expired_at else None,
+            "created_at": invite.created_at.isoformat() if invite.created_at else None,
+            "updated_at": invite.updated_at.isoformat() if invite.updated_at else None,
+            "project": {
+                "id": str(project.id),
+                "name": project.name,
+                "description": project.description,
+                "type": project.type.value if hasattr(project.type, 'value') else str(project.type),
+                "owner_id": str(project.owner_id),
+                "owner": {
+                    "id": str(project_owner.id) if project_owner else None,
+                    "username": project_owner.username if project_owner else None,
+                    "full_name": project_owner.full_name if project_owner else None,
+                    "profile": project_owner.profile if project_owner else None,
+                } if project_owner else None,
+                "created_at": project.created_at.isoformat() if project.created_at else None,
+            },
+            "invited_by": {
+                "id": str(inviter.id),
+                "username": inviter.username,
+                "full_name": inviter.full_name,
+                "profile": inviter.profile,
+                "email": inviter.email,
+            },
+            "user_exists": user_exists,
+        }
+
+    def get_pending_invite(self, email: str):
+        """Get a pending invitation by project ID and email."""
+        invites = (
+            self.db.query(ProjectInvite)
+            .join(Project, ProjectInvite.project_id == Project.id)
+            .join(User, ProjectInvite.invited_by == User.id)
+            .filter(
+                and_(
+                    ProjectInvite.email == email,
+                    ProjectInvite.status == InviteStatus.pending
+                )
+            )
+            .all()
+        )
+        
+        result = []
+        for invite in invites:
+            project = self.db.query(Project).filter(Project.id == invite.project_id).first()
+            inviter = self.db.query(User).filter(User.id == invite.invited_by).first()
+            
+            result.append({
+                "id": str(invite.id),
+                "token": invite.token,
+                "project": ProjectSchema.model_validate(project).model_dump(mode="json"),
+                "invited_by": UserSchema.model_validate(inviter).model_dump(mode="json"),
+                "status": invite.status.value,
+                "expired_at": invite.expired_at.isoformat() if invite.expired_at else None,
+                "created_at": invite.created_at.isoformat() if invite.created_at else None,
+            })
+        
+        return result
