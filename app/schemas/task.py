@@ -1,6 +1,6 @@
 from datetime import datetime, date
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 import uuid
 import enum
 
@@ -32,6 +32,11 @@ class TaskResponse(TaskBase):
     created_by: uuid.UUID
     created_at: datetime
     updated_at: Optional[datetime] = None
+    subtasks: List["SubTaskResponse"] = []  # List of subtasks
 
     class Config:
         from_attributes = True
+
+# Import at the end to avoid circular imports
+from app.schemas.subtask import SubTaskResponse
+TaskResponse.model_rebuild()
