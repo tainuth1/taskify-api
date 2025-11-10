@@ -5,7 +5,7 @@ from sqlalchemy import or_, and_
 from app.core.config import settings
 from app.schemas.project import ProjectCreate, ProjectResponse, ProjectDetailResponse, ProjectUpdate
 from app.schemas.user import User as UserSchema
-from app.models import Project as ProjectModel, ProjectMember, User
+from app.models import Project as ProjectModel, ProjectMember, Task, User
 from app.models.project import ProjectType as ProjectTypeModel
 from app.models.project_member import MemberRole, MemberStatus
 
@@ -236,6 +236,20 @@ class ProjectController:
         from app.schemas.project import ProjectType as ProjectTypeSchema
         project_type = ProjectTypeSchema.personal if project.type == ProjectTypeModel.personal else ProjectTypeSchema.group
         
+        tasks = self.db.query(Task).filter(Task.project_id == project_id).all()
+        task_payload = []
+        for t in tasks:
+            task_payload.append({
+                "id": t.id,
+                "title": t.title,
+                "description": t.description,
+                "priority": t.priority.value,
+                "status": t.status.value,
+                "due_date": t.due_date,
+                "created_at": t.created_at,
+                "updated_at": t.updated_at,
+            })
+
         # Build response
         project_detail = ProjectDetailResponse(
             id=project.id,
@@ -245,8 +259,7 @@ class ProjectController:
             owner_id=project.owner_id,
             members=members_payload,
             user_role=user_role.value if user_role else None,
-            tasks=[],  # Empty for now, structure for future
-            subtasks=[],  # Empty for now, structure for future
+            tasks= task_payload,
             comments=[],  # Empty for now, structure for future
             created_at=project.created_at,
             updated_at=project.updated_at,
