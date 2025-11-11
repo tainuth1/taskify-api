@@ -709,3 +709,117 @@ class TaskController:
             "message": "Task unassigned successfully",
             "unassigned": assignment_info
         }
+
+    def _can_update_task_status(self, user_id: str, task: Task) -> tuple[bool, str]:
+        """Check if user can update task status.
+        
+        Returns: (allowed: bool, reason: str)
+        
+        Permissions:
+        - Personal task: only creator can update
+        - Personal project: only owner can update any task
+        - Group project: 
+            - Owner/Admin: can update any task
+            - Member: can only update assigned tasks
+            - Viewer: cannot update
+        """
+        # Personal task (no project)
+        if task.project_id is None:
+            # User must be the creator
+            if str(task.user_id) != user_id and str(task.created_by) != user_id:
+                return False, "You can only update status of your own personal tasks"
+            return True, ""
+
+        # Project task - check project and permissions
+        project = self.db.query(ProjectModel).filter(ProjectModel.id == task.project_id).first()
+        if not project:
+            return False, "Project not found"
+
+        # Get user's role in the project
+        role = self._get_user_project_role(user_id, str(task.project_id))
+        if not role:
+            return False, "Access denied"
+        
+        # Personal project: only owner can update
+        if project.type == ProjectTypeModel.personal:
+            if role != MemberRole.owner:
+                return False, "Only project owner can update task status"
+            return True, ""
+        
+        # Group project: check role permissions
+        else:
+            # Owner and admin can update any task
+            if role in [MemberRole.owner, MemberRole.admin]:
+                return True, ""
+            
+            # Viewer cannot update
+            if role == MemberRole.viewer:
+                return False, "Viewers cannot update task status"
+            
+            # Member: can only update if assigned to the task
+            if role == MemberRole.member:
+                # Check if user is assigned to this task
+                assignment = (
+                    self.db.query(TaskAssignee)
+                    .filter(TaskAssignee.tasks_id == task.id)
+                    .filter(TaskAssignee.user_id == user_id)
+                    .first()
+                )
+                
+                if not assignment:
+                    return False, "Members can only update status of tasks assigned to them"
+                return True, ""
+            
+            return False, "Access denied"
+        
+    def update_task_status(self, task_id: str, new_status: TaskStatus, token: str) -> TaskResponse:
+        """Update task status only.
+        
+        Permissions:
+        - Personal task: only creator can update
+        - Personal project: only owner can update any task
+        - Group project:
+            - Owner/Admin: can update any task status
+            - Member: can only update status of assigned tasks
+            - Viewer: cannot update
+        
+        Args:
+            task_id: Task ID to update
+            new_status: New status value
+            token: Authentication token
+        
+        Returns:
+            Updated TaskResponse with subtasks and assignees
+        
+        Raises:
+            ValueError: If task not found, access denied, or insufficient permissions
+        """
+        user_id = self._authenticate_user(token)
+        
+        # Get task
+        task = self.db.query(Task).filter(Task.id == task_id).first()
+        if not task:
+            raise ValueError("Task not found")
+
+        # Check status update permissions
+        allowed, reason = self._can_update_task_status(user_id, task)
+        if not allowed:
+            raise ValueError(reason)
+        
+        # Convert schema enum to model enum
+        status_model = TaskStatusModel.pending
+        if new_status.value == "in_progress":
+            status_model = TaskStatusModel.in_progress
+        elif new_status.value == "stuck":
+            status_model = TaskStatusModel.stuck
+        elif new_status.value == "done":
+            status_model = TaskStatusModel.done
+
+        # Update status
+        task.status = status_model
+        
+        self.db.commit()
+        self.db.refresh(task)
+        
+        # Return updated task with subtasks and assignees
+        return self._model_to_schema_task(task, include_subtasks=True, include_assignees=True)
