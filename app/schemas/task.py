@@ -25,6 +25,17 @@ class TaskBase(BaseModel):
 class TaskCreate(TaskBase):
     project_id: Optional[uuid.UUID] = None  # None for personal task
 
+class TaskUpdate(BaseModel):
+    id: uuid.UUID
+    title: Optional[str] = None
+    description: Optional[str] = None
+    priority: Optional[TaskPriority] = None
+    status: Optional[TaskStatus] = None
+    due_date: Optional[date] = None
+
+    class Config:
+        from_attributes = True
+
 class TaskResponse(TaskBase):
     id: uuid.UUID
     project_id: Optional[uuid.UUID]

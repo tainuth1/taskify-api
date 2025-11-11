@@ -8,7 +8,7 @@ from app.models import ProjectMember, SubTask, Task, User
 from app.models.project import Project as ProjectModel
 from app.models.project_member import MemberRole, MemberStatus
 from app.schemas.subtask import SubTaskResponse, SubTaskStatus
-from app.schemas.task import TaskCreate, TaskPriority, TaskResponse, TaskStatus
+from app.schemas.task import TaskCreate, TaskPriority, TaskResponse, TaskStatus, TaskUpdate
 from app.models.task import TaskStatus as TaskStatusModel, TaskPriority as TaskPriorityModel
 from app.models.subtask import TaskStatus as SubTaskStatusModel
 
@@ -348,6 +348,98 @@ class TaskController:
             if not self._check_project_view_access(user_id, str(task.project_id)):
                 raise ValueError("Access denied")
         
+        return self._model_to_schema_task(task, include_subtasks=True)
+
+    def _can_update_task(self, user_id: str, task: Task) -> tuple[bool, str]:
+        """Check if user can update a task.
+        Returns: (allowed: bool, reason: str)
+        """
+        # Personal task (no project)
+        if task.project_id is None:
+            # User must be the creator (owner)
+            if str(task.user_id) != user_id and str(task.created_by) != user_id:
+                return False, "You can only update your own personal tasks"
+            return True, ""
+        
+        # Project task - check project and permissions
+        project = self.db.query(ProjectModel).filter(ProjectModel.id == task.project_id).first()
+        if not project:
+            return False, "Project not found"
+        
+        # Get user's role in the project
+        role = self._get_user_project_role(user_id, str(task.project_id))
+        if not role:
+            return False, "Access denied"
+        
+        # Personal project: only owner can update
+        if project.type == ProjectTypeModel.personal:
+            if role != MemberRole.owner:
+                return False, "Only project owner can update tasks"
+            return True, ""
+        
+        # Group project: only owner and admin can update
+        else:
+            if role not in [MemberRole.owner, MemberRole.admin]:
+                return False, "Only owners and admins can update tasks"
+            return True, ""
+
+    def update_task(self, updated_task: TaskUpdate, token: str) -> TaskResponse:
+        """Update a task. Only owners and admins can update.
+        
+        Validates permissions:
+        - Personal task: user must be the creator (owner)
+        - Personal project task: user must be owner
+        - Group project task: user must be owner or admin
+        
+        Raises ValueError if task not found, access denied, or insufficient permissions.
+        Returns the updated task.
+        """
+        user_id = self._authenticate_user(token)
+
+        # Get task
+        task = self.db.query(Task).filter(Task.id == updated_task.id).first()
+        if not task:
+            raise ValueError("Task not found")
+
+        # Check update permissions
+        allowed, reason = self._can_update_task(user_id, task)
+        if not allowed:
+            raise ValueError(reason)
+
+        # Update only provided fields
+        if updated_task.title is not None:
+            task.title = updated_task.title
+        
+        if updated_task.description is not None:
+            task.description = updated_task.description
+
+        if updated_task.priority is not None:
+            # Convert schema enum to model enum
+            if updated_task.priority.value == "low":
+                task.priority = TaskPriorityModel.low
+            elif updated_task.priority.value == "medium":
+                task.priority = TaskPriorityModel.medium
+            elif updated_task.priority.value == "high":
+                task.priority = TaskPriorityModel.high
+        
+        if updated_task.status is not None:
+            # Convert schema enum to model enum
+            if updated_task.status.value == "pending":
+                task.status = TaskStatusModel.pending
+            elif updated_task.status.value == "in_progress":
+                task.status = TaskStatusModel.in_progress
+            elif updated_task.status.value == "stuck":
+                task.status = TaskStatusModel.stuck
+            elif updated_task.status.value == "done":
+                task.status = TaskStatusModel.done
+
+        if updated_task.due_date is not None:
+            task.due_date = updated_task.due_date
+
+        self.db.commit()
+        self.db.refresh(task)
+
+        # Return updated task with subtasks
         return self._model_to_schema_task(task, include_subtasks=True)
 
     def _can_delete_task(self, user_id: str, task: Task) -> tuple[bool, str]:
