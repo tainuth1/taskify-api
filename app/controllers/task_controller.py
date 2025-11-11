@@ -4,11 +4,13 @@ from sqlalchemy import and_
 from sqlalchemy.orm import Session
 from app.controllers.project_controller import ProjectTypeModel
 from app.core.config import settings
-from app.models import ProjectMember, SubTask, Task, User
+from app.models import ProjectMember, SubTask, Task, User, TaskAssignee
 from app.models.project import Project as ProjectModel
 from app.models.project_member import MemberRole, MemberStatus
 from app.schemas.subtask import SubTaskResponse, SubTaskStatus
 from app.schemas.task import TaskCreate, TaskPriority, TaskResponse, TaskStatus, TaskUpdate
+from app.schemas.task_assignee import TaskAssigneeResponse
+from app.schemas.user import User as UserSchema
 from app.models.task import TaskStatus as TaskStatusModel, TaskPriority as TaskPriorityModel
 from app.models.subtask import TaskStatus as SubTaskStatusModel
 
@@ -210,6 +212,24 @@ class TaskController:
         else:
             return member is not None
     
+    def _model_to_schema_assignee(self, assignee: TaskAssignee) -> TaskAssigneeResponse:
+        """Convert TaskAssignee model to TaskAssigneeResponse schema."""
+        # Fetch user details
+        user = self.db.query(User).filter(User.id == assignee.user_id).first()
+        if not user:
+            raise ValueError(f"User {assignee.user_id} not found")
+        
+        user_schema = UserSchema.model_validate(user)
+        
+        return TaskAssigneeResponse(
+            id=assignee.id,
+            user_id=assignee.user_id,
+            tasks_id=assignee.tasks_id,
+            assigned_by=assignee.assigned_by,
+            assigned_at=assignee.assigned_at,
+            user=user_schema
+        )
+
     def _model_to_schema_subtask(self, subtask: SubTask) -> SubTaskResponse:
         """Convert SubTask model to SubTaskResponse schema."""
         # Convert model enum to schema enum
@@ -230,12 +250,13 @@ class TaskController:
             updated_at=subtask.updated_at
         )
 
-    def _model_to_schema_task(self, task: Task, include_subtasks: bool = False) -> TaskResponse:
+    def _model_to_schema_task(self, task: Task, include_subtasks: bool = False, include_assignees: bool = False) -> TaskResponse:
         """Convert Task model to TaskResponse schema.
         
         Args:
             task: Task model instance
             include_subtasks: If True, includes subtasks in the response
+            include_assignees: If True, includes assignees in the response
         """
         # Convert model enums back to schema enums
         status_enum = TaskStatus.pending
@@ -262,6 +283,16 @@ class TaskController:
             )
             subtasks = [self._model_to_schema_subtask(st) for st in subtask_models]
         
+        # Fetch assignees if requested
+        assignees = []
+        if include_assignees:
+            assignee_models = (
+                self.db.query(TaskAssignee)
+                .filter(TaskAssignee.tasks_id == task.id)
+                .all()
+            )
+            assignees = [self._model_to_schema_assignee(assignee) for assignee in assignee_models]
+        
         return TaskResponse(
             id=task.id,
             project_id=task.project_id,
@@ -274,7 +305,8 @@ class TaskController:
             created_by=task.created_by,
             created_at=task.created_at,
             updated_at=task.updated_at,
-            subtasks=subtasks
+            subtasks=subtasks,
+            assignees=assignees
         )
 
     def get_all_tasks(self, token: str) -> list[TaskResponse]:
@@ -302,6 +334,7 @@ class TaskController:
         """Get all tasks for a specific project.
         
         Validates user has access to the project before returning tasks.
+        Includes subtasks and assignees for each task.
         """
         user_id = self._authenticate_user(token)
         
@@ -321,7 +354,8 @@ class TaskController:
             .all()
         )
         
-        return [self._model_to_schema_task(task, include_subtasks=True) for task in tasks]
+        # Convert to response format with subtasks and assignees
+        return [self._model_to_schema_task(task, include_subtasks=True, include_assignees=True) for task in tasks]
 
     def get_task_by_id(self, token: str, task_id: str) -> TaskResponse:
         """Get a single task by ID.
@@ -329,6 +363,7 @@ class TaskController:
         Validates user has access to the task:
         - Personal task: user must be the creator (user_id or created_by)
         - Project task: user must have access to the project
+        Includes subtasks and assignees for the task.
         """
         user_id = self._authenticate_user(token)
         
@@ -348,7 +383,8 @@ class TaskController:
             if not self._check_project_view_access(user_id, str(task.project_id)):
                 raise ValueError("Access denied")
         
-        return self._model_to_schema_task(task, include_subtasks=True)
+        # Return task with subtasks and assignees
+        return self._model_to_schema_task(task, include_subtasks=True, include_assignees=True)
 
     def _can_update_task(self, user_id: str, task: Task) -> tuple[bool, str]:
         """Check if user can update a task.
@@ -513,4 +549,163 @@ class TaskController:
         return {
             "message": "Task deleted successfully",
             "deleted_task": task_info
+        }
+
+    def assign_task_to_user(self, token: str, task_id: str, user_id: str) -> TaskAssigneeResponse:
+        """Assign a task to a user.
+        
+        Only owners and admins can assign tasks.
+        - Personal project: only owner can assign
+        - Group project: only owner or admin can assign
+        
+        Args:
+            token: Authentication token
+            task_id: Task ID to assign
+            user_id: User ID to assign the task to
+        
+        Returns:
+            TaskAssigneeResponse with assignment details
+        """
+        authenticated_user_id = self._authenticate_user(token)
+        
+        # Get task
+        task = self.db.query(Task).filter(Task.id == task_id).first()
+        if not task:
+            raise ValueError("Task not found")
+        
+        # Check if task belongs to a project (assignments only for project tasks)
+        if task.project_id is None:
+            raise ValueError("Cannot assign personal tasks. Assignments are only for project tasks.")
+        
+        # Check if user to be assigned exists
+        assignee_user = self.db.query(User).filter(User.id == user_id).first()
+        if not assignee_user:
+            raise ValueError("User to assign not found")
+        
+        if not assignee_user.is_active:
+            raise ValueError("Cannot assign task to inactive user")
+        
+        # Check project and permissions
+        project = self.db.query(ProjectModel).filter(ProjectModel.id == task.project_id).first()
+        if not project:
+            raise ValueError("Project not found")
+        
+        # Get authenticated user's role
+        role = self._get_user_project_role(authenticated_user_id, str(task.project_id))
+        if not role:
+            raise ValueError("Access denied")
+        
+        # Check permissions: only owner/admin can assign
+        if project.type == ProjectTypeModel.personal:
+            if role != MemberRole.owner:
+                raise ValueError("Only project owner can assign tasks")
+        else:  # group project
+            if role not in [MemberRole.owner, MemberRole.admin]:
+                raise ValueError("Only owners and admins can assign tasks")
+        
+        # Check if assignee is a member of the project
+        assignee_member = (
+            self.db.query(ProjectMember)
+            .filter(ProjectMember.project_id == task.project_id)
+            .filter(ProjectMember.user_id == user_id)
+            .filter(ProjectMember.status == MemberStatus.active)
+            .first()
+        )
+        
+        if not assignee_member:
+            raise ValueError("Cannot assign task to user who is not a project member")
+        
+        # Check if task is already assigned to this user
+        existing_assignment = (
+            self.db.query(TaskAssignee)
+            .filter(TaskAssignee.tasks_id == task_id)
+            .filter(TaskAssignee.user_id == user_id)
+            .first()
+        )
+        
+        if existing_assignment:
+            raise ValueError("Task is already assigned to this user")
+        
+        # Create assignment
+        new_assignment = TaskAssignee(
+            user_id=user_id,
+            tasks_id=task_id,
+            assigned_by=authenticated_user_id
+        )
+        
+        self.db.add(new_assignment)
+        self.db.commit()
+        self.db.refresh(new_assignment)
+        
+        return self._model_to_schema_assignee(new_assignment)
+
+    def unassign_task_from_user(self, token: str, task_id: str, user_id: str) -> dict:
+        """Unassign a task from a user.
+        
+        Only owners and admins can unassign tasks.
+        - Personal project: only owner can unassign
+        - Group project: only owner or admin can unassign
+        
+        Args:
+            token: Authentication token
+            task_id: Task ID to unassign
+            user_id: User ID to unassign the task from
+        
+        Returns:
+            Success message with assignment details
+        """
+        authenticated_user_id = self._authenticate_user(token)
+        
+        # Get task
+        task = self.db.query(Task).filter(Task.id == task_id).first()
+        if not task:
+            raise ValueError("Task not found")
+        
+        # Check if task belongs to a project
+        if task.project_id is None:
+            raise ValueError("Cannot unassign personal tasks. Unassignments are only for project tasks.")
+        
+        # Check project and permissions
+        project = self.db.query(ProjectModel).filter(ProjectModel.id == task.project_id).first()
+        if not project:
+            raise ValueError("Project not found")
+        
+        # Get authenticated user's role
+        role = self._get_user_project_role(authenticated_user_id, str(task.project_id))
+        if not role:
+            raise ValueError("Access denied")
+        
+        # Check permissions: only owner/admin can unassign
+        if project.type == ProjectTypeModel.personal:
+            if role != MemberRole.owner:
+                raise ValueError("Only project owner can unassign tasks")
+        else:  # group project
+            if role not in [MemberRole.owner, MemberRole.admin]:
+                raise ValueError("Only owners and admins can unassign tasks")
+        
+        # Find assignment
+        assignment = (
+            self.db.query(TaskAssignee)
+            .filter(TaskAssignee.tasks_id == task_id)
+            .filter(TaskAssignee.user_id == user_id)
+            .first()
+        )
+        
+        if not assignment:
+            raise ValueError("Task is not assigned to this user")
+        
+        # Store info before deletion
+        assignment_info = {
+            "task_id": str(task_id),
+            "user_id": str(user_id),
+            "assigned_by": str(assignment.assigned_by)
+        }
+        
+        # Delete assignment
+        self.db.delete(assignment)
+        self.db.commit()
+        
+        return {
+            "message": "Task unassigned successfully",
+            "unassigned": assignment_info
         }

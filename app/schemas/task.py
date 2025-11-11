@@ -36,6 +36,13 @@ class TaskUpdate(BaseModel):
     class Config:
         from_attributes = True
 
+class TaskStatusUpdate(BaseModel):
+    task_id: uuid.UUID
+    status: TaskStatus
+
+    class Config:
+        from_attributes = True
+
 class TaskResponse(TaskBase):
     id: uuid.UUID
     project_id: Optional[uuid.UUID]
@@ -44,10 +51,12 @@ class TaskResponse(TaskBase):
     created_at: datetime
     updated_at: Optional[datetime] = None
     subtasks: List["SubTaskResponse"] = []  # List of subtasks
+    assignees: List["TaskAssigneeResponse"] = []  # List of assignees
 
     class Config:
         from_attributes = True
 
 # Import at the end to avoid circular imports
 from app.schemas.subtask import SubTaskResponse
+from app.schemas.task_assignee import TaskAssigneeResponse
 TaskResponse.model_rebuild()

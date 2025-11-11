@@ -7,6 +7,8 @@ from app.database import get_db
 from app.schemas.task import TaskCreate, TaskResponse, TaskUpdate
 import uuid
 
+from app.schemas.task_assignee import TaskAssignRequest, TaskAssigneeResponse
+
 
 router = APIRouter()
 
@@ -165,6 +167,59 @@ def delete_task(request: Request, task_id: uuid.UUID, db: Session = Depends(get_
         if "not found" in error_message.lower():
             raise HTTPException(status_code=404, detail=error_message)
         elif "access denied" in error_message.lower() or "only" in error_message.lower() or "can only delete" in error_message.lower():
+            raise HTTPException(status_code=403, detail=error_message)
+        else:
+            raise HTTPException(status_code=401, detail=error_message)
+
+@router.post("/tasks/{task_id}/assign", status_code=201, description="Assign a task to a user")
+def assign_task(request: Request, task_id: uuid.UUID, payload: TaskAssignRequest = Body(...), db: Session = Depends(get_db)):
+    controller = TaskController(db)
+    token: str | None = None
+
+    token = request.cookies.get(settings.ACCESS_TOKEN_COOKIE_NAME)
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing access token")
+
+    try:
+        assignment_data = controller.assign_task_to_user(token, str(task_id), str(payload.user_id))
+        assignment_out = TaskAssigneeResponse.model_validate(assignment_data)
+        return {
+            "success": True,
+            "message": "Task assigned successfully",
+            "data": assignment_out.model_dump(mode="json")
+        }
+    except ValueError as e:
+        error_message = str(e)
+        if "not found" in error_message.lower():
+            raise HTTPException(status_code=404, detail=error_message)
+        elif "access denied" in error_message.lower() or "only" in error_message.lower() or "cannot assign" in error_message.lower():
+            raise HTTPException(status_code=403, detail=error_message)
+        elif "already assigned" in error_message.lower():
+            raise HTTPException(status_code=400, detail=error_message)
+        else:
+            raise HTTPException(status_code=401, detail=error_message)
+
+@router.delete("/tasks/{task_id}/assign/{user_id}", status_code=200, description="Unassign a task from a user")
+def unassign_task(request: Request, task_id: uuid.UUID, user_id: uuid.UUID, db: Session = Depends(get_db)):
+    controller = TaskController(db)
+    token: str | None = None
+
+    token = request.cookies.get(settings.ACCESS_TOKEN_COOKIE_NAME)
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing access token")
+
+    try:
+        result = controller.unassign_task_from_user(token, str(task_id), str(user_id))
+        return {
+            "success": True,
+            "message": result["message"],
+            "data": result["unassigned"]
+        }
+    except ValueError as e:
+        error_message = str(e)
+        if "not found" in error_message.lower() or "not assigned" in error_message.lower():
+            raise HTTPException(status_code=404, detail=error_message)
+        elif "access denied" in error_message.lower() or "only" in error_message.lower() or "cannot unassign" in error_message.lower():
             raise HTTPException(status_code=403, detail=error_message)
         else:
             raise HTTPException(status_code=401, detail=error_message)
