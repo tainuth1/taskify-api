@@ -128,10 +128,6 @@ class ProjectController:
         user_id = payload.get("sub")
 
         # Join projects with project_members to find all projects for this user (active membership)
-        # Personal projects: only show if user is owner
-        # Group projects: show if user is any active member
-        # return personal project when user is owner
-        # and return group project when user is an active members
         projects = (
             self.db.query(ProjectModel)
             .join(ProjectMember, ProjectMember.project_id == ProjectModel.id)
@@ -154,11 +150,12 @@ class ProjectController:
         if not projects:
             return []
 
-        # Fetch all members for these projects in bulk to get all members for all projects
+        # Fetch only active members for these projects
         project_ids = {p.id for p in projects}
         member_rows = (
             self.db.query(ProjectMember)
             .filter(ProjectMember.project_id.in_(project_ids))
+            .filter(ProjectMember.status == MemberStatus.active)  # Only active members!
             .all()
         )
 
