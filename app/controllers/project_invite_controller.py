@@ -24,7 +24,7 @@ class ProjectInviteController:
         if not project:
             raise ValueError("Project not found")
         
-        # Check if user is already a member
+        # Check if user is already an active member
         existing_member = (
             self.db.query(ProjectMember)
             .join(User, ProjectMember.user_id == User.id)
@@ -122,7 +122,7 @@ class ProjectInviteController:
 
     def accept_invite(self, token: str, user_id: str) -> ProjectMember:
         """Accept an invitation. User must be authenticated."""
-        print(token)
+        
         invite = (
             self.db.query(ProjectInvite)
             .filter(ProjectInvite.token == token)
@@ -145,25 +145,38 @@ class ProjectInviteController:
         if not user:
             raise ValueError("User not found")
 
-        # Check if already a member (edge case)
+        # Check if user has ANY existing membership record (regardless of status)
         existing_member = (
             self.db.query(ProjectMember)
             .filter(
                 and_(
                     ProjectMember.project_id == invite.project_id,
-                    ProjectMember.user_id == user_id,
-                    ProjectMember.status == MemberStatus.active
+                    ProjectMember.user_id == user_id
                 )
             )
             .first()
         )
+        
         if existing_member:
-            # Update invite status but don't create duplicate member
-            invite.status = InviteStatus.accepted
-            self.db.commit()
-            return existing_member
+            # If already active, just return it
+            if existing_member.status == MemberStatus.active:
+                invite.status = InviteStatus.accepted
+                self.db.commit()
+                return existing_member
+            
+            # If status is 'remove' or 'left', reactivate the member
+            if existing_member.status in [MemberStatus.remove, MemberStatus.left]:
+                existing_member.status = MemberStatus.active
+                existing_member.left_at = None  # Clear the left_at timestamp
+                # Optionally update join_at to current time, or keep original
+                # existing_member.join_at = datetime.utcnow().replace(tzinfo=timezone.utc)
+                
+                invite.status = InviteStatus.accepted
+                self.db.commit()
+                self.db.refresh(existing_member)
+                return existing_member
 
-        # Create project member (default role: member, can be customized)
+        # No existing record found, create new project member
         project_member = ProjectMember(
             user_id=user_id,
             project_id=invite.project_id,

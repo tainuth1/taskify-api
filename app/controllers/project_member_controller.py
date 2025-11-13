@@ -6,11 +6,9 @@ from datetime import datetime, timezone
 from app.core.config import settings
 from app.models import ProjectMember, User, Project as ProjectModel
 from app.models.project_member import MemberRole, MemberStatus
-from app.schemas.project_member import MemberRoleUpdate, ProjectMemberResponse, ProjectMemberDetailResponse
+from app.schemas.project_member import MemberRoleUpdate, ProjectMemberResponse, ProjectMemberDetailResponse, MemberRemoveRequest, MemberLeaveRequest
 from app.schemas.user import User as UserSchema
 from app.controllers.project_controller import ProjectTypeModel
-from app.schemas.project_member import MemberRemoveRequest
-from pydantic import BaseModel
 import uuid
 
 class ProjectMemberController:
@@ -240,6 +238,56 @@ class ProjectMemberController:
             project_id=member_to_remove.project_id,
             role=member_to_remove.role.value,
             status=member_to_remove.status.value
+        )
+
+    def leave_project(self, payload: MemberLeaveRequest, token: str) -> ProjectMemberResponse:
+        """Leave a project by changing status to 'left'.
+        
+        Rules:
+        - Everyone (admin/member/viewer) can leave the project
+        - Owner cannot leave the project
+        - Only works for group projects
+        """
+        user_id = self._authenticate_user(token)
+        
+        # Verify project exists
+        project = self.db.query(ProjectModel).filter(ProjectModel.id == str(payload.project_id)).first()
+        if not project:
+            raise ValueError("Project not found")
+        
+        # Only allow leaving group projects
+        if project.type == ProjectTypeModel.personal:
+            raise ValueError("Cannot leave personal projects")
+        
+        # Find the user's membership record
+        member_to_leave = (
+            self.db.query(ProjectMember)
+            .filter(ProjectMember.project_id == payload.project_id)
+            .filter(ProjectMember.user_id == user_id)
+            .filter(ProjectMember.status == MemberStatus.active)
+            .first()
+        )
+        
+        if not member_to_leave:
+            raise ValueError("You are not an active member of this project")
+        
+        # Owner cannot leave the project
+        if member_to_leave.role == MemberRole.owner:
+            raise ValueError("Owner cannot leave the project")
+        
+        # Update member status to 'left' and set left_at timestamp
+        member_to_leave.status = MemberStatus.left
+        member_to_leave.left_at = datetime.utcnow().replace(tzinfo=timezone.utc)
+        
+        self.db.commit()
+        self.db.refresh(member_to_leave)
+        
+        return ProjectMemberResponse(
+            id=member_to_leave.id,
+            user_id=member_to_leave.user_id,
+            project_id=member_to_leave.project_id,
+            role=member_to_leave.role.value,
+            status=member_to_leave.status.value
         )
 
     

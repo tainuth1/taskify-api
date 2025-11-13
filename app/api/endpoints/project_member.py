@@ -5,7 +5,7 @@ import uuid
 from app.controllers.project_member_controller import ProjectMemberController
 from app.core.config import settings
 from app.database import get_db
-from app.schemas.project_member import MemberRoleUpdate, ProjectMemberResponse, ProjectMemberDetailResponse, MemberRemoveRequest
+from app.schemas.project_member import MemberRoleUpdate, ProjectMemberResponse, ProjectMemberDetailResponse, MemberRemoveRequest, MemberLeaveRequest
 
 
 router = APIRouter()
@@ -87,3 +87,30 @@ def remove_member(request: Request, payload: MemberRemoveRequest = Body(...), db
             raise HTTPException(status_code=403, detail=error_message)
         else:
             raise HTTPException(status_code=401, detail=error_message)
+
+@router.post("/project-member/leave", status_code=200, description="Leave a project")
+def leave_project(request: Request, payload: MemberLeaveRequest = Body(...), db: Session = Depends(get_db)):
+    controller = ProjectMemberController(db)
+    token: str | None = None
+
+    token = request.cookies.get(settings.ACCESS_TOKEN_COOKIE_NAME)
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing access token")
+
+    try:
+        member_data = controller.leave_project(payload, token)
+        member_out = ProjectMemberResponse.model_validate(member_data)
+        return {
+            "success": True,
+            "message": "Left project successfully",
+            "data": member_out.model_dump(mode="json")
+        }
+    except ValueError as e:
+        error_message = str(e)
+        if "not found" in error_message.lower() or "not an active member" in error_message.lower():
+            raise HTTPException(status_code=404, detail=error_message)
+        elif "access denied" in error_message.lower() or "cannot" in error_message.lower():
+            raise HTTPException(status_code=403, detail=error_message)
+        else:
+            raise HTTPException(status_code=400, detail=error_message)
+

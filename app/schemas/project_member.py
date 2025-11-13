@@ -47,3 +47,9 @@ class MemberRemoveRequest(BaseModel):
 
     class Config:
         from_attributes = True
+
+class MemberLeaveRequest(BaseModel):
+    project_id: uuid.UUID
+
+    class Config:
+        from_attributes = True
