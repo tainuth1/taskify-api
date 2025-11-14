@@ -52,7 +52,7 @@ class ProjectDetailResponse(ProjectBase):
     owner_id: uuid.UUID
     members: List[dict] = []  # each item: {"user": User, "role": str}
     user_role: Optional[str] = None  # Current user's role in the project
-    tasks: List[dict] = []  # Structure for future task integration
-    comments: List[dict] = []  # Structure for future comment integration
+    # tasks: List[dict] = []  # Structure for future task integration
+    # comments: List[dict] = []  # Structure for future comment integration
     created_at: datetime
     updated_at: Optional[datetime] = None

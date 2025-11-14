@@ -8,6 +8,7 @@ from app.schemas.user import User as UserSchema
 from app.models import Project as ProjectModel, ProjectMember, Task, User
 from app.models.project import ProjectType as ProjectTypeModel
 from app.models.project_member import MemberRole, MemberStatus
+from app.schemas.project import ProjectType as ProjectTypeSchema
 
 
 class ProjectController:
@@ -230,9 +231,9 @@ class ProjectController:
             members_payload.append(entry)
         
         # Convert project type enum for schema
-        from app.schemas.project import ProjectType as ProjectTypeSchema
         project_type = ProjectTypeSchema.personal if project.type == ProjectTypeModel.personal else ProjectTypeSchema.group
         
+        """ Structure for future task integration
         tasks = self.db.query(Task).filter(Task.project_id == project_id).all()
         task_payload = []
         for t in tasks:
@@ -246,6 +247,7 @@ class ProjectController:
                 "created_at": t.created_at,
                 "updated_at": t.updated_at,
             })
+        """
 
         # Build response
         project_detail = ProjectDetailResponse(
@@ -256,8 +258,8 @@ class ProjectController:
             owner_id=project.owner_id,
             members=members_payload,
             user_role=user_role.value if user_role else None,
-            tasks= task_payload,
-            comments=[],  # Empty for now, structure for future
+            # tasks= task_payload,
+            # comments=[],  # Empty for now, structure for future
             created_at=project.created_at,
             updated_at=project.updated_at,
         )
