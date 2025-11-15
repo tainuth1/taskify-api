@@ -36,6 +36,32 @@ def create_task(request: Request, payload: SubTaskCreate = Body(...), db: Sessio
         else:
             raise HTTPException(status_code=401, detail=error_message)
 
+@router.get("/tasks/{task_id}/subtasks", status_code=200, description="Get all subtasks for a task")
+def get_subtasks_by_task(request: Request, task_id: uuid.UUID, db: Session = Depends(get_db)):
+    controller = SubTaskController(db)
+    token: str | None = None
+
+    token = request.cookies.get(settings.ACCESS_TOKEN_COOKIE_NAME)
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing access token")
+
+    try:
+        subtasks_data = controller.get_subtasks_by_task(str(task_id), token)
+        subtasks_out = [SubTaskResponse.model_validate(subtask) for subtask in subtasks_data]
+        return {
+            "success": True,
+            "message": "Get subtasks successfully",
+            "data": subtasks_out
+        }
+    except ValueError as e:
+        error_message = str(e)
+        if "not found" in error_message.lower():
+            raise HTTPException(status_code=404, detail=error_message)
+        elif "access denied" in error_message.lower() or "must be a project member" in error_message.lower():
+            raise HTTPException(status_code=403, detail=error_message)
+        else:
+            raise HTTPException(status_code=401, detail=error_message)
+
 @router.patch("/tasks/subtasks/{subtask_id}", status_code=200, description="Update a subtask (partial)")
 def update_subtask(request: Request, subtask_id: uuid.UUID, payload: SubTaskUpdate = Body(...), db: Session = Depends(get_db)):
     controller = SubTaskController(db)

@@ -46,6 +46,90 @@ class SubTaskController:
         )
         return member.role if member else None
 
+    def _check_project_membership(self, user_id: str, project_id: str) -> bool:
+        """Check if user is an active member of the project."""
+        member = (
+            self.db.query(ProjectMember)
+            .filter(ProjectMember.project_id == project_id)
+            .filter(ProjectMember.user_id == user_id)
+            .filter(ProjectMember.status == MemberStatus.active)
+            .first()
+        )
+        return member is not None
+
+    def _can_view_subtasks(self, user_id: str, task: Task) -> tuple[bool, str]:
+        """Check if user can view subtasks for a task.
+        Returns: (allowed: bool, reason: str)
+        
+        Rules:
+        - If task belongs to a project: user must be an active project member
+        - If task is personal: user must be the creator
+        """
+        # Personal task (no project)
+        if task.project_id is None:
+            # User must be the creator
+            if str(task.user_id) != user_id and str(task.created_by) != user_id:
+                return False, "Access denied"
+            return True, ""
+        
+        # Project task - check if user is a project member
+        if not self._check_project_membership(user_id, str(task.project_id)):
+            return False, "Access denied. You must be a project member to view subtasks."
+        
+        return True, ""
+
+    def get_subtasks_by_task(self, task_id: str, token: str) -> list[SubTaskResponse]:
+        """Get all subtasks for a task.
+        
+        Rules:
+        - If task belongs to a project: user must be an active project member
+        - If task is personal: user must be the creator
+        
+        Returns list of subtasks.
+        """
+        user_id = self._authenticate_user(token)
+        
+        # Get task
+        task = self.db.query(Task).filter(Task.id == task_id).first()
+        if not task:
+            raise ValueError("Task not found")
+        
+        # Check if user can view subtasks for this task
+        allowed, reason = self._can_view_subtasks(user_id, task)
+        if not allowed:
+            raise ValueError(reason)
+        
+        # Get all subtasks for this task
+        subtasks = (
+            self.db.query(SubTask)
+            .filter(SubTask.tasks_id == task_id)
+            .order_by(SubTask.created_at.asc())
+            .all()
+        )
+        
+        # Convert to response format
+        result = []
+        for subtask in subtasks:
+            # Convert model enum to schema enum
+            status_enum = SubTaskStatus.pending
+            if subtask.status == SubTaskStatusModel.in_progress:
+                status_enum = SubTaskStatus.in_progress
+            elif subtask.status == SubTaskStatusModel.stuck:
+                status_enum = SubTaskStatus.stuck
+            elif subtask.status == SubTaskStatusModel.done:
+                status_enum = SubTaskStatus.done
+            
+            result.append(SubTaskResponse(
+                id=subtask.id,
+                tasks_id=subtask.tasks_id,
+                title=subtask.title,
+                status=status_enum,
+                created_at=subtask.created_at,
+                updated_at=subtask.updated_at
+            ))
+        
+        return result
+
     def _can_create_subtask(self, user_id: str, task: Task) -> tuple[bool, str]:
         """Check if user can create subtasks for a task.
         Returns: (allowed: bool, reason: str)
