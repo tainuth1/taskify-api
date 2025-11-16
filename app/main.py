@@ -1,6 +1,8 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
 from app.api.route import api_router
+from app.core.limiter import limiter, rate_limit_handler
 from app.core.config import settings
 from app.database import engine, Base
 from sqlalchemy import text
@@ -27,6 +29,9 @@ app = FastAPI(
     description = settings.DESCRIBTION,
     version = settings.VERSION
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_handler)
 
 cloudinary.config(
     cloud_name=settings.CLOUDINARY_CLOUD_NAME,

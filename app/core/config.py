@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     OTP_EXPIRE_MINUTES: int = 5
     RESET_PASSWORD_TOKEN_EXPIRE_MINUTES: int = 5
 
+    # Rate Limiting Configuration
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_PER_MINUTE: int = 60  # Default: 60 requests per minute
+    RATE_LIMIT_PER_HOUR: int = 1000  # Default: 1000 requests per hour
+
     class Config:
         env_file = ".env"
         extra = "ignore"
