@@ -230,26 +230,6 @@ class TaskController:
             user=user_schema
         )
 
-    def _model_to_schema_subtask(self, subtask: SubTask) -> SubTaskResponse:
-        """Convert SubTask model to SubTaskResponse schema."""
-        # Convert model enum to schema enum
-        status_enum = SubTaskStatus.pending
-        if subtask.status == SubTaskStatusModel.in_progress:
-            status_enum = SubTaskStatus.in_progress
-        elif subtask.status == SubTaskStatusModel.stuck:
-            status_enum = SubTaskStatus.stuck
-        elif subtask.status == SubTaskStatusModel.done:
-            status_enum = SubTaskStatus.done
-        
-        return SubTaskResponse(
-            id=subtask.id,
-            tasks_id=subtask.tasks_id,
-            title=subtask.title,
-            status=status_enum,
-            created_at=subtask.created_at,
-            updated_at=subtask.updated_at
-        )
-
     def _model_to_schema_task(self, task: Task, include_subtasks: bool = False, include_assignees: bool = False) -> TaskResponse:
         """Convert Task model to TaskResponse schema.
         
@@ -273,16 +253,6 @@ class TaskController:
         elif task.priority == TaskPriorityModel.high:
             priority_enum = TaskPriority.high
         
-        # Fetch subtasks if requested
-        subtasks = []
-        if include_subtasks:
-            subtask_models = (
-                self.db.query(SubTask)
-                .filter(SubTask.tasks_id == task.id)
-                .all()
-            )
-            subtasks = [self._model_to_schema_subtask(st) for st in subtask_models]
-        
         # Fetch assignees if requested
         assignees = []
         if include_assignees:
@@ -305,7 +275,6 @@ class TaskController:
             created_by=task.created_by,
             created_at=task.created_at,
             updated_at=task.updated_at,
-            subtasks=subtasks,
             assignees=assignees
         )
 

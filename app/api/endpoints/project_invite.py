@@ -108,7 +108,7 @@ def get_invitation_details(token: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail=str(e))
 
 @router.get("/invitations/pending", status_code=200)
-def get_pending_invitaions(request: Request, db: Session = Depends(get_db)):
+def get_pending_invitaions_for_user(request: Request, db: Session = Depends(get_db)):
     """Get all pending invitations for the authenticated user."""
     controller = ProjectInviteController(db)
     
@@ -121,7 +121,7 @@ def get_pending_invitaions(request: Request, db: Session = Depends(get_db)):
         user_id = jwt_payload.get("sub")
         user = db.query(User).filter(User.id == user_id).first()
 
-        invite_data = controller.get_pending_invite(user.email)
+        invite_data = controller.get_pending_invite_for_user(user.email)
         return {
             "success": True,
             "message": "Get pending invitations successfully",
@@ -129,3 +129,30 @@ def get_pending_invitaions(request: Request, db: Session = Depends(get_db)):
         }
     except Exception as e:
         raise HTTPException(status_code=401, detail=str(e))
+
+@router.get("/projects/{project_id}/invites/pending", status_code=200)
+def get_pending_invites_for_project(request: Request, project_id: str, db: Session = Depends(get_db)):
+    """Get all pending invitations for a project."""
+    controller = ProjectInviteController(db)
+    
+    token = request.cookies.get(settings.ACCESS_TOKEN_COOKIE_NAME)
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing access token")
+    
+    try:
+        jwt_payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        user_id = jwt_payload.get("sub")
+    except:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    
+    try:
+        invites = controller.get_pending_invites_for_project(project_id, user_id)
+        return {
+            "success": True,
+            "message": "Get pending invitations for project successfully",
+            "data": invites
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

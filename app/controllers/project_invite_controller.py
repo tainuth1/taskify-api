@@ -17,12 +17,31 @@ class ProjectInviteController:
         self.db = db
 
     def invite_user_by_email(self, project_id: str, email: str, invited_by_user_id: str) -> ProjectInvite:
-        """Invite a user to a project by email."""
+        """Invite a user to a project by email. Only owners and admins can invite."""
         
-        # Validate project exists and inviter has permission
+        # Validate project exists
         project = self.db.query(Project).filter(Project.id == project_id).first()
         if not project:
             raise ValueError("Project not found")
+        
+        # Check if inviter is an active member with owner or admin role
+        inviter_member = (
+            self.db.query(ProjectMember)
+            .filter(
+                and_(
+                    ProjectMember.project_id == project_id,
+                    ProjectMember.user_id == invited_by_user_id,
+                    ProjectMember.status == MemberStatus.active
+                )
+            )
+            .first()
+        )
+        
+        if not inviter_member:
+            raise ValueError("You are not a member of this project")
+        
+        if inviter_member.role not in [MemberRole.owner, MemberRole.admin]:
+            raise ValueError("Only owners and admins can invite new members")
         
         # Check if user is already an active member
         existing_member = (
@@ -144,6 +163,10 @@ class ProjectInviteController:
         user = self.db.query(User).filter(User.id == user_id).first()
         if not user:
             raise ValueError("User not found")
+        
+        # Validate that the authenticated user's email matches the invite email
+        if user.email.lower() != invite.email.lower():
+            raise ValueError("This invitation is for a different email address")
 
         # Check if user has ANY existing membership record (regardless of status)
         existing_member = (
@@ -278,7 +301,7 @@ class ProjectInviteController:
             "user_exists": user_exists,
         }
 
-    def get_pending_invite(self, email: str):
+    def get_pending_invite_for_user(self, email: str):
         """Get a pending invitation by project ID and email."""
         invites = (
             self.db.query(ProjectInvite)
@@ -306,6 +329,71 @@ class ProjectInviteController:
                 "status": invite.status.value,
                 "expired_at": invite.expired_at.isoformat() if invite.expired_at else None,
                 "created_at": invite.created_at.isoformat() if invite.created_at else None,
+            })
+        
+        return result
+
+    def get_pending_invites_for_project(self, project_id: str, user_id: str) -> list:
+        """Get all pending invitations for a project. User must be a member of the project."""
+        
+        # Validate project exists
+        project = self.db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise ValueError("Project not found")
+        
+        # Check if user is a member of the project (active status)
+        member = (
+            self.db.query(ProjectMember)
+            .filter(
+                and_(
+                    ProjectMember.project_id == project_id,
+                    ProjectMember.user_id == user_id,
+                    ProjectMember.status == MemberStatus.active
+                )
+            )
+            .first()
+        )
+        if not member:
+            raise ValueError("You are not a member of this project")
+        
+        # Get all pending invites for the project
+        Inviter = aliased(User)
+        invites = (
+            self.db.query(ProjectInvite, Inviter)
+            .join(Inviter, ProjectInvite.invited_by == Inviter.id)
+            .filter(
+                and_(
+                    ProjectInvite.project_id == project_id,
+                    ProjectInvite.status == InviteStatus.pending
+                )
+            )
+            .order_by(ProjectInvite.created_at.desc())
+            .all()
+        )
+        
+        result = []
+        for invite, inviter in invites:
+            # Check if invite is expired
+            is_expired = False
+            if invite.expired_at and invite.expired_at < datetime.utcnow().replace(tzinfo=timezone.utc):
+                is_expired = True
+            
+            result.append({
+                "id": str(invite.id),
+                "email": invite.email,
+                "token": invite.token,
+                "status": invite.status.value,
+                "expired_at": invite.expired_at.isoformat() if invite.expired_at else None,
+                "created_at": invite.created_at.isoformat() if invite.created_at else None,
+                "updated_at": invite.updated_at.isoformat() if invite.updated_at else None,
+                "is_expired": is_expired,
+                "invited_by": {
+                    "id": str(inviter.id),
+                    "username": inviter.username,
+                    "full_name": inviter.full_name,
+                    "email": inviter.email,
+                    "profile": inviter.profile,
+                }
             })
         
         return result

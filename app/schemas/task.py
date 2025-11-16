@@ -50,7 +50,6 @@ class TaskResponse(TaskBase):
     created_by: uuid.UUID
     created_at: datetime
     updated_at: Optional[datetime] = None
-    subtasks: List["SubTaskResponse"] = []  # List of subtasks
     assignees: List["TaskAssigneeResponse"] = []  # List of assignees
 
     class Config:
