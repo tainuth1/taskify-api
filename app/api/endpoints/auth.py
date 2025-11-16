@@ -9,10 +9,12 @@ from app.database import get_db
 from app.schemas.otp import ForgotPasswordIn, ResetPasswordIn, VerifyOtpIn
 from app.schemas.user import UserCreate, UserLogin, User
 from app.controllers.auth_controller import AuthController
+from app.core.limiter import limiter
 
 router = APIRouter() 
 
 @router.post("/refresh", status_code=200, description="Refresh Access Token")
+@limiter.limit("30/minute")
 def refresh_token(request: Request):
     try:
         refresh_token = request.cookies.get(settings.REFRESH_TOKEN_COOKIE_NAME)
@@ -45,7 +47,8 @@ def refresh_token(request: Request):
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
 
 @router.post("/signin", status_code=200, description="Signed User In")
-def signin(user: UserLogin, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def signin(request: Request, user: UserLogin, db: Session = Depends(get_db)):
     controller = AuthController(db)
     try:
         login_user, access_token, refresh_token = controller.signin(user)
@@ -66,7 +69,8 @@ def signin(user: UserLogin, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail=str(e))
 
 @router.post("/signup", status_code=201, description="Create User Account")
-def signup(user: UserCreate, db: Session = Depends(get_db)):
+@limiter.limit("5/hour")
+async def signup(request: Request, user: UserCreate, db: Session = Depends(get_db)):
     controller = AuthController(db)
     
     try:
@@ -89,6 +93,7 @@ def signup(user: UserCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/me", status_code=200, description="Get User Data")
+@limiter.limit("60/minute")
 def me(request: Request, db: Session = Depends(get_db)):
     controller = AuthController(db)
     token: str | None = None
@@ -110,6 +115,7 @@ def me(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail=str(e))
 
 @router.patch("/update", status_code=200, description="Update Profile")
+@limiter.limit("10/hour")
 async def update_profile(
     request: Request, 
     email: str = Form(...), 
@@ -137,7 +143,8 @@ async def update_profile(
         raise HTTPException(status_code=401, detail=str(e))
 
 @router.post("/signout", status_code=200)
-def signout():
+@limiter.limit("30/minute")
+def signout(request: Request):
     response = JSONResponse(
         content={"success": True, "message": "Signed out"}
     )
@@ -145,7 +152,8 @@ def signout():
     return response
 
 @router.post("/forgot-password", status_code=200, description="Request OTP for change password")
-def forgot_password(payload: ForgotPasswordIn, db: Session = Depends(get_db)):
+@limiter.limit("3/hour")
+def forgot_password(request: Request, payload: ForgotPasswordIn, db: Session = Depends(get_db)):
     controller = AuthController(db)
     try:
         controller.request_password_reset(payload.email)
@@ -158,7 +166,8 @@ def forgot_password(payload: ForgotPasswordIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail=str(e))
 
 @router.post("/verify-otp", status_code=200, description="Verify OTP")
-def verify_otp(payload: VerifyOtpIn, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def verify_otp(request: Request, payload: VerifyOtpIn, db: Session = Depends(get_db)):
     controller = AuthController(db)
     try:
         reset_token = controller.verify_otp_issue_reset_password(payload.email, payload.otp)
@@ -171,7 +180,8 @@ def verify_otp(payload: VerifyOtpIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/reset-password", status_code=200, description="Reset Password")
-def reset_password(payload: ResetPasswordIn, db: Session = Depends(get_db)):
+@limiter.limit("5/hour")
+def reset_password(request: Request, payload: ResetPasswordIn, db: Session = Depends(get_db)):
     controller = AuthController(db)
     try:
         controller.reset_password_with_token(payload.reset_token, payload.new_password)
