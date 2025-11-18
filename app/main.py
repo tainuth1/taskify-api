@@ -42,12 +42,15 @@ cloudinary.config(
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 
+# CORS Configuration - Only allow your frontend domain
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:8000"],
+    allow_origins=[settings.FRONTEND_URL],  # Use your frontend URL from settings
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],  # Specify methods instead of "*"
+    allow_headers=["Content-Type", "Authorization", "Accept"],  # Specify headers instead of "*"
+    expose_headers=["*"],  # Headers your frontend can read
+    max_age=3600,  # Cache preflight requests for 1 hour
 )
 
 @app.exception_handler(HTTPException)

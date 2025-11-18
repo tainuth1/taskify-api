@@ -14,7 +14,7 @@ from app.core.limiter import limiter
 router = APIRouter() 
 
 @router.post("/refresh", status_code=200, description="Refresh Access Token")
-@limiter.limit("30/minute")
+# @limiter.limit("30/minute")
 def refresh_token(request: Request):
     try:
         refresh_token = request.cookies.get(settings.REFRESH_TOKEN_COOKIE_NAME)
@@ -47,7 +47,7 @@ def refresh_token(request: Request):
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
 
 @router.post("/signin", status_code=200, description="Signed User In")
-@limiter.limit("5/minute")
+# @limiter.limit("5/minute")
 def signin(request: Request, user: UserLogin, db: Session = Depends(get_db)):
     controller = AuthController(db)
     try:
@@ -69,7 +69,7 @@ def signin(request: Request, user: UserLogin, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail=str(e))
 
 @router.post("/signup", status_code=201, description="Create User Account")
-@limiter.limit("5/hour")
+# @limiter.limit("5/hour")
 async def signup(request: Request, user: UserCreate, db: Session = Depends(get_db)):
     controller = AuthController(db)
     
@@ -93,7 +93,7 @@ async def signup(request: Request, user: UserCreate, db: Session = Depends(get_d
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/me", status_code=200, description="Get User Data")
-@limiter.limit("60/minute")
+# @limiter.limit("60/minute")
 def me(request: Request, db: Session = Depends(get_db)):
     controller = AuthController(db)
     token: str | None = None
@@ -115,7 +115,7 @@ def me(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail=str(e))
 
 @router.patch("/update", status_code=200, description="Update Profile")
-@limiter.limit("10/hour")
+# @limiter.limit("10/hour")
 async def update_profile(
     request: Request, 
     email: str = Form(...), 
@@ -143,7 +143,7 @@ async def update_profile(
         raise HTTPException(status_code=401, detail=str(e))
 
 @router.post("/signout", status_code=200)
-@limiter.limit("30/minute")
+# @limiter.limit("30/minute")
 def signout(request: Request):
     response = JSONResponse(
         content={"success": True, "message": "Signed out"}
@@ -152,7 +152,7 @@ def signout(request: Request):
     return response
 
 @router.post("/forgot-password", status_code=200, description="Request OTP for change password")
-@limiter.limit("3/hour")
+# @limiter.limit("3/hour")
 def forgot_password(request: Request, payload: ForgotPasswordIn, db: Session = Depends(get_db)):
     controller = AuthController(db)
     try:
@@ -166,7 +166,7 @@ def forgot_password(request: Request, payload: ForgotPasswordIn, db: Session = D
         raise HTTPException(status_code=404, detail=str(e))
 
 @router.post("/verify-otp", status_code=200, description="Verify OTP")
-@limiter.limit("5/minute")
+# @limiter.limit("5/minute")
 def verify_otp(request: Request, payload: VerifyOtpIn, db: Session = Depends(get_db)):
     controller = AuthController(db)
     try:
@@ -180,7 +180,7 @@ def verify_otp(request: Request, payload: VerifyOtpIn, db: Session = Depends(get
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/reset-password", status_code=200, description="Reset Password")
-@limiter.limit("5/hour")
+# @limiter.limit("5/hour")
 def reset_password(request: Request, payload: ResetPasswordIn, db: Session = Depends(get_db)):
     controller = AuthController(db)
     try:
