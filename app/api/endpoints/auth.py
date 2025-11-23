@@ -57,7 +57,7 @@ def signin(request: Request, user: UserLogin, db: Session = Depends(get_db)):
         response = JSONResponse(
             content = {
                 "success": True,
-                "messsage": "Signin successfully.",
+                "message": "Signin successfully.",
                 "data": user_out.model_dump(mode="json"),
                 "token_type": "bearer"
             }

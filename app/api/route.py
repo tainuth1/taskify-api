@@ -6,6 +6,7 @@ from app.api.endpoints import project_invite
 from app.api.endpoints import task
 from app.api.endpoints import subtask
 from app.api.endpoints import comment
+from app.api.endpoints import complex_ui
 
 api_router = APIRouter()
 
@@ -16,3 +17,4 @@ api_router.include_router(project_invite.router, tags=["Project Invites"])
 api_router.include_router(task.router, tags=["Tasks"])
 api_router.include_router(subtask.router, tags=["SubTask"])
 api_router.include_router(comment.router, tags=["Comments"])
+api_router.include_router(complex_ui.router, tags=["Complex UI"])

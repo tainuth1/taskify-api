@@ -8,7 +8,7 @@ from app.models import ProjectMember, SubTask, Task, User, TaskAssignee
 from app.models.project import Project as ProjectModel
 from app.models.project_member import MemberRole, MemberStatus
 from app.schemas.subtask import SubTaskResponse, SubTaskStatus
-from app.schemas.task import TaskCreate, TaskPriority, TaskResponse, TaskStatus, TaskUpdate
+from app.schemas.task import TaskCreate, TaskPriority, TaskResponse, TaskStatus, TaskUpdate, SubTaskCount, CreatedByUser
 from app.schemas.task_assignee import TaskAssigneeResponse
 from app.schemas.user import User as UserSchema
 from app.models.task import TaskStatus as TaskStatusModel, TaskPriority as TaskPriorityModel
@@ -156,36 +156,8 @@ class TaskController:
         self.db.commit()
         self.db.refresh(new_task)
 
-        # Convert model enums back to schema enums for response
-        status_enum = TaskStatus.pending
-        if new_task.status == TaskStatusModel.in_progress:
-            status_enum = TaskStatus.in_progress
-        elif new_task.status == TaskStatusModel.stuck:
-            status_enum = TaskStatus.stuck
-        elif new_task.status == TaskStatusModel.done:
-            status_enum = TaskStatus.done
-        
-        priority_enum = TaskPriority.low
-        if new_task.priority == TaskPriorityModel.medium:
-            priority_enum = TaskPriority.medium
-        elif new_task.priority == TaskPriorityModel.high:
-            priority_enum = TaskPriority.high
-
-        task_response = TaskResponse(
-            id=new_task.id,
-            project_id=new_task.project_id,
-            user_id=new_task.user_id,
-            title=new_task.title,
-            description=new_task.description,
-            priority=priority_enum,
-            status=status_enum,
-            due_date=new_task.due_date,
-            created_by=new_task.created_by,
-            created_at=new_task.created_at,
-            updated_at=new_task.updated_at
-        )
-
-        return task_response
+        # Convert to response format using the helper method
+        return self._model_to_schema_task(new_task, include_subtasks=False, include_assignees=False)
 
     def _check_project_view_access(self, user_id: str, project_id: str) -> bool:
         """Check if user can view tasks in a project.
@@ -235,46 +207,83 @@ class TaskController:
         
         Args:
             task: Task model instance
-            include_subtasks: If True, includes subtasks in the response
-            include_assignees: If True, includes assignees in the response
+            include_subtasks: Deprecated - subtasks are always included as counts
+            include_assignees: Deprecated - assignees are always included
         """
-        # Convert model enums back to schema enums
-        status_enum = TaskStatus.pending
+        # Convert model enums to strings
+        status_str = "pending"
         if task.status == TaskStatusModel.in_progress:
-            status_enum = TaskStatus.in_progress
+            status_str = "in_progress"
         elif task.status == TaskStatusModel.stuck:
-            status_enum = TaskStatus.stuck
+            status_str = "stuck"
         elif task.status == TaskStatusModel.done:
-            status_enum = TaskStatus.done
+            status_str = "done"
         
-        priority_enum = TaskPriority.low
+        priority_str = "low"
         if task.priority == TaskPriorityModel.medium:
-            priority_enum = TaskPriority.medium
+            priority_str = "medium"
         elif task.priority == TaskPriorityModel.high:
-            priority_enum = TaskPriority.high
+            priority_str = "high"
         
-        # Fetch assignees if requested
+        # Count subtasks
+        subtasks = (
+            self.db.query(SubTask)
+            .filter(SubTask.tasks_id == task.id)
+            .all()
+        )
+        total_subtasks = len(subtasks)
+        done_subtasks = sum(1 for st in subtasks if st.status == SubTaskStatusModel.done)
+        
+        # Fetch assignees with full user data (always include assignees)
+        assignee_models = (
+            self.db.query(TaskAssignee)
+            .filter(TaskAssignee.tasks_id == task.id)
+            .all()
+        )
         assignees = []
-        if include_assignees:
-            assignee_models = (
-                self.db.query(TaskAssignee)
-                .filter(TaskAssignee.tasks_id == task.id)
-                .all()
-            )
-            assignees = [self._model_to_schema_assignee(assignee) for assignee in assignee_models]
+        for assignee_model in assignee_models:
+            assignee_user = self.db.query(User).filter(User.id == assignee_model.user_id).first()
+            if assignee_user:
+                assignees.append(CreatedByUser(
+                    id=str(assignee_user.id),
+                    email=assignee_user.email,
+                    username=assignee_user.username,
+                    full_name=assignee_user.full_name,
+                    profile=assignee_user.profile
+                ))
+        
+        # Fetch creator user information
+        creator_user = self.db.query(User).filter(User.id == task.created_by).first()
+        if not creator_user:
+            raise ValueError(f"Creator user {task.created_by} not found")
+        
+        created_by_user = CreatedByUser(
+            id=str(creator_user.id),
+            email=creator_user.email,
+            username=creator_user.username,
+            full_name=creator_user.full_name,
+            profile=creator_user.profile
+        )
+        
+        # Convert dates to strings
+        due_date_str = task.due_date.isoformat() if task.due_date else None
+        created_at_str = task.created_at.isoformat() if task.created_at else ""
+        updated_at_str = task.updated_at.isoformat() if task.updated_at else None
         
         return TaskResponse(
-            id=task.id,
-            project_id=task.project_id,
-            user_id=task.user_id,
+            id=str(task.id),
+            project_id=str(task.project_id) if task.project_id else None,
+            user_id=str(task.user_id) if task.user_id else "",
             title=task.title,
             description=task.description,
-            priority=priority_enum,
-            status=status_enum,
-            due_date=task.due_date,
-            created_by=task.created_by,
-            created_at=task.created_at,
-            updated_at=task.updated_at,
+            priority=priority_str,
+            status=status_str,
+            due_date=due_date_str,
+            created_by=str(task.created_by),
+            created_by_user=created_by_user,
+            created_at=created_at_str,
+            updated_at=updated_at_str,
+            subtask=SubTaskCount(total=total_subtasks, done=done_subtasks),
             assignees=assignees
         )
 
@@ -444,8 +453,8 @@ class TaskController:
         self.db.commit()
         self.db.refresh(task)
 
-        # Return updated task with subtasks
-        return self._model_to_schema_task(task, include_subtasks=True)
+        # Return updated task with subtasks and assignees
+        return self._model_to_schema_task(task, include_subtasks=True, include_assignees=True)
 
     def _can_delete_task(self, user_id: str, task: Task) -> tuple[bool, str]:
         """Check if user can delete a task.

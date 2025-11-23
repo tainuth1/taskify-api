@@ -22,6 +22,10 @@ class TaskBase(BaseModel):
     status: TaskStatus = TaskStatus.pending
     due_date: Optional[date] = None
 
+class SubTaskCount(BaseModel):
+    total: int
+    done: int
+
 class TaskCreate(TaskBase):
     project_id: Optional[uuid.UUID] = None  # None for personal task
 
@@ -43,19 +47,28 @@ class TaskStatusUpdate(BaseModel):
     class Config:
         from_attributes = True
 
-class TaskResponse(TaskBase):
-    id: uuid.UUID
-    project_id: Optional[uuid.UUID]
-    user_id: Optional[uuid.UUID]  # Only set for personal tasks
-    created_by: uuid.UUID
-    created_at: datetime
-    updated_at: Optional[datetime] = None
-    assignees: List["TaskAssigneeResponse"] = []  # List of assignees
+class CreatedByUser(BaseModel):
+    id: str
+    email: str
+    username: str
+    full_name: Optional[str] = None
+    profile: Optional[str] = None
+
+class TaskResponse(BaseModel):
+    title: str
+    description: Optional[str]
+    priority: str
+    status: str
+    due_date: Optional[str] = None
+    id: str
+    project_id: Optional[str] = None
+    user_id: str
+    created_by: str
+    created_by_user: CreatedByUser
+    created_at: str
+    updated_at: Optional[str] = None
+    subtask: SubTaskCount
+    assignees: List[CreatedByUser] = []
 
     class Config:
         from_attributes = True
-
-# Import at the end to avoid circular imports
-from app.schemas.subtask import SubTaskResponse
-from app.schemas.task_assignee import TaskAssigneeResponse
-TaskResponse.model_rebuild()
