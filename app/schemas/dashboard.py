@@ -23,3 +23,18 @@ class DashboardResponse(BaseModel):
     dueSoon: List[TaskResponse]
     taskPerformance: TaskPerformance
 
+class GeneralData(BaseModel):
+    tasks: int
+    invitations: int
+
+class ProjectsData(BaseModel):
+    projects: int
+
+class SettingsData(BaseModel):
+    notification: int
+
+class SidebarDataResponse(BaseModel):
+    general: GeneralData
+    projects: ProjectsData
+    settings: SettingsData
+

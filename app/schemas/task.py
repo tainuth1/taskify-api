@@ -4,6 +4,9 @@ from typing import Optional, List
 import uuid
 import enum
 
+from app.schemas.comment import CommentResponse
+from app.schemas.subtask import SubTaskResponse
+
 class TaskStatus(str, enum.Enum):
     pending = "pending"
     in_progress = "in_progress"
@@ -72,3 +75,7 @@ class TaskResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+class TaskDetailResponse(TaskResponse):
+    subtasks: List[SubTaskResponse]
+    comments: List[CommentResponse]

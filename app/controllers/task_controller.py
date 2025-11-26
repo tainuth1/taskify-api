@@ -4,11 +4,12 @@ from sqlalchemy import and_
 from sqlalchemy.orm import Session
 from app.controllers.project_controller import ProjectTypeModel
 from app.core.config import settings
-from app.models import ProjectMember, SubTask, Task, User, TaskAssignee
+from app.models import ProjectMember, SubTask, Task, User, TaskAssignee, Comment
 from app.models.project import Project as ProjectModel
 from app.models.project_member import MemberRole, MemberStatus
 from app.schemas.subtask import SubTaskResponse, SubTaskStatus
-from app.schemas.task import TaskCreate, TaskPriority, TaskResponse, TaskStatus, TaskUpdate, SubTaskCount, CreatedByUser
+from app.schemas.task import TaskCreate, TaskPriority, TaskResponse, TaskStatus, TaskUpdate, SubTaskCount, CreatedByUser, TaskDetailResponse
+from app.schemas.comment import CommentResponse
 from app.schemas.task_assignee import TaskAssigneeResponse
 from app.schemas.user import User as UserSchema
 from app.models.task import TaskStatus as TaskStatusModel, TaskPriority as TaskPriorityModel
@@ -296,12 +297,14 @@ class TaskController:
         user_id = self._authenticate_user(token)
 
         # Only fetch personal tasks (not belonging to any project)
+        # Order by created_at descending (newest first)
         tasks = (
             self.db.query(Task)
             .filter(
                 Task.project_id.is_(None),
                 Task.user_id == user_id
             )
+            .order_by(Task.created_at.desc())
             .all()
         )
         
@@ -326,22 +329,24 @@ class TaskController:
             raise ValueError("Access denied")
         
         # Get all tasks for this project
+        # Order by created_at descending (newest first)
         tasks = (
             self.db.query(Task)
             .filter(Task.project_id == project_id)
+            .order_by(Task.created_at.desc())
             .all()
         )
         
         # Convert to response format with subtasks and assignees
         return [self._model_to_schema_task(task, include_subtasks=True, include_assignees=True) for task in tasks]
 
-    def get_task_by_id(self, token: str, task_id: str) -> TaskResponse:
+    def get_task_by_id(self, token: str, task_id: str) -> TaskDetailResponse:
         """Get a single task by ID.
         
         Validates user has access to the task:
         - Personal task: user must be the creator (user_id or created_by)
         - Project task: user must have access to the project
-        Includes subtasks and assignees for the task.
+        Includes subtasks, comments, and assignees for the task.
         """
         user_id = self._authenticate_user(token)
         
@@ -361,8 +366,63 @@ class TaskController:
             if not self._check_project_view_access(user_id, str(task.project_id)):
                 raise ValueError("Access denied")
         
-        # Return task with subtasks and assignees
-        return self._model_to_schema_task(task, include_subtasks=True, include_assignees=True)
+        # Get base TaskResponse
+        base_task = self._model_to_schema_task(task, include_subtasks=True, include_assignees=True)
+        
+        # Fetch subtasks as full list
+        subtask_models = (
+            self.db.query(SubTask)
+            .filter(SubTask.tasks_id == task_id)
+            .order_by(SubTask.created_at.asc())
+            .all()
+        )
+        subtasks = []
+        for subtask in subtask_models:
+            # Convert model enum to schema enum
+            status_enum = SubTaskStatus.pending
+            if subtask.status == SubTaskStatusModel.in_progress:
+                status_enum = SubTaskStatus.in_progress
+            elif subtask.status == SubTaskStatusModel.stuck:
+                status_enum = SubTaskStatus.stuck
+            elif subtask.status == SubTaskStatusModel.done:
+                status_enum = SubTaskStatus.done
+            
+            subtasks.append(SubTaskResponse(
+                id=subtask.id,
+                tasks_id=subtask.tasks_id,
+                title=subtask.title,
+                status=status_enum,
+                created_at=subtask.created_at,
+                updated_at=subtask.updated_at
+            ))
+        
+        # Fetch comments as full list
+        comment_models = (
+            self.db.query(Comment)
+            .filter(Comment.tasks_id == task_id)
+            .order_by(Comment.created_at.asc())
+            .all()
+        )
+        comments = []
+        for comment in comment_models:
+            user = self.db.query(User).filter(User.id == comment.user_id).first()
+            user_schema = UserSchema.model_validate(user) if user else None
+            
+            comments.append(CommentResponse(
+                id=comment.id,
+                user_id=comment.user_id,
+                tasks_id=comment.tasks_id,
+                content=comment.content,
+                created_at=comment.created_at,
+                user=user_schema
+            ))
+        
+        # Return TaskDetailResponse with subtasks and comments
+        return TaskDetailResponse(
+            **base_task.model_dump(),
+            subtasks=subtasks,
+            comments=comments
+        )
 
     def _can_update_task(self, user_id: str, task: Task) -> tuple[bool, str]:
         """Check if user can update a task.

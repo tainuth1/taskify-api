@@ -32,3 +32,28 @@ def get_dashboard_data(request: Request, db: Session = Depends(get_db)):
             raise HTTPException(status_code=403, detail=error_message)
         else:
             raise HTTPException(status_code=401, detail=error_message)
+
+@router.get("/sidebar", status_code=200, description="Get sidebar data")
+def get_sidebar_data(request: Request, db: Session = Depends(get_db)):
+    controller = ComplexUIController(db)
+    token: str | None = None
+
+    token = request.cookies.get(settings.ACCESS_TOKEN_COOKIE_NAME)
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing access token")
+
+    try:
+        sidebar_data = controller.get_sidebar_data(token)
+        return {
+            "success": True,
+            "message": "Get sidebar data successfully",
+            "data": sidebar_data.model_dump(mode="json")
+        }
+    except ValueError as e:
+        error_message = str(e)
+        if "not found" in error_message.lower():
+            raise HTTPException(status_code=404, detail=error_message)
+        elif "access denied" in error_message.lower():
+            raise HTTPException(status_code=403, detail=error_message)
+        else:
+            raise HTTPException(status_code=401, detail=error_message)

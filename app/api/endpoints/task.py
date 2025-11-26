@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from app.controllers.task_controller import TaskController
 from app.core.config import settings
 from app.database import get_db
-from app.schemas.task import TaskCreate, TaskResponse, TaskStatusUpdate, TaskUpdate
+from app.schemas.task import TaskCreate, TaskResponse, TaskStatusUpdate, TaskUpdate, TaskDetailResponse
 import uuid
 
 from app.schemas.task_assignee import TaskAssignRequest, TaskAssigneeResponse
@@ -101,7 +101,7 @@ def get_task_by_id(request: Request, task_id: uuid.UUID, db: Session = Depends(g
 
     try:
         task_data = controller.get_task_by_id(token, str(task_id))
-        task_out = TaskResponse.model_validate(task_data)
+        task_out = TaskDetailResponse.model_validate(task_data)
         return {
             "success": True,
             "message": "Get task successfully",

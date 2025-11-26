@@ -5,13 +5,14 @@ from datetime import date, datetime
 from typing import List
 
 from app.core.config import settings
-from app.models import ProjectMember, SubTask, Task, User, TaskAssignee
+from app.models import ProjectMember, SubTask, Task, User, TaskAssignee, ProjectInvite
 from app.models.project import Project as ProjectModel
 from app.models.project_member import MemberRole, MemberStatus
+from app.models.project_invite import InviteStatus
 from app.models.task import TaskStatus as TaskStatusModel, TaskPriority as TaskPriorityModel
 from app.models.subtask import TaskStatus as SubTaskStatusModel
 from app.controllers.project_controller import ProjectTypeModel
-from app.schemas.dashboard import DashboardResponse, StatItem, HighPriorityTasks, TaskPerformance
+from app.schemas.dashboard import DashboardResponse, StatItem, HighPriorityTasks, TaskPerformance, SidebarDataResponse, GeneralData, ProjectsData, SettingsData
 from app.schemas.task import TaskResponse, SubTaskCount, CreatedByUser
 
 
@@ -174,7 +175,7 @@ class ComplexUIController:
         completed_tasks = all_tasks_query.filter(Task.status == TaskStatusModel.done).count()
         
         # High priority tasks logic
-        # Priority order: high > medium > low
+        # Priority order: high > medium > low (for filtering)
         priority_order = case(
             (Task.priority == TaskPriorityModel.high, 1),
             (Task.priority == TaskPriorityModel.medium, 2),
@@ -183,22 +184,43 @@ class ComplexUIController:
         )
         
         # Personal high priority tasks (not done, limit 3)
-        personal_high_priority = (
+        # Get high priority first, if none then order by priority level
+        # Then order final result by due_date (earliest first, NULLs last)
+        personal_high_priority_query = (
             self.db.query(Task)
             .filter(
                 Task.project_id.is_(None),
                 Task.user_id == user_id,
                 Task.status != TaskStatusModel.done
             )
-            .order_by(priority_order)
-            .limit(3)
-            .all()
         )
+        
+        # Try to get high priority tasks first
+        high_priority_personal = personal_high_priority_query.filter(
+            Task.priority == TaskPriorityModel.high
+        ).limit(3).all()
+        
+        if len(high_priority_personal) < 3:
+            # If we don't have 3 high priority tasks, get more ordered by priority level
+            remaining_needed = 3 - len(high_priority_personal)
+            high_priority_ids = [t.id for t in high_priority_personal]
+            additional_tasks = (
+                personal_high_priority_query.filter(~Task.id.in_(high_priority_ids) if high_priority_ids else True)
+                .order_by(priority_order)
+                .limit(remaining_needed)
+                .all()
+            )
+            personal_high_priority = high_priority_personal + additional_tasks
+        else:
+            personal_high_priority = high_priority_personal
+        
+        # Sort final result by due_date (earliest first, NULLs last)
+        personal_high_priority.sort(key=lambda t: (t.due_date is None, t.due_date or date.max))
         
         # Project high priority tasks (not done, limit 3)
         # Show only tasks created by the user OR assigned to the user
         if accessible_project_ids:
-            project_high_priority = (
+            project_high_priority_query = (
                 self.db.query(Task)
                 .outerjoin(TaskAssignee, TaskAssignee.tasks_id == Task.id)
                 .filter(
@@ -210,27 +232,50 @@ class ComplexUIController:
                     )
                 )
                 .group_by(Task.id)  # Group by Task.id to avoid duplicates
-                .order_by(priority_order)
-                .limit(3)
-                .all()
             )
+            
+            # Try to get high priority tasks first
+            high_priority_project = project_high_priority_query.filter(
+                Task.priority == TaskPriorityModel.high
+            ).limit(3).all()
+            
+            if len(high_priority_project) < 3:
+                # If we don't have 3 high priority tasks, get more ordered by priority level
+                remaining_needed = 3 - len(high_priority_project)
+                high_priority_ids = [t.id for t in high_priority_project]
+                additional_tasks = (
+                    project_high_priority_query.filter(~Task.id.in_(high_priority_ids) if high_priority_ids else True)
+                    .order_by(priority_order)
+                    .limit(remaining_needed)
+                    .all()
+                )
+                project_high_priority = high_priority_project + additional_tasks
+            else:
+                project_high_priority = high_priority_project
+            
+            # Sort final result by due_date (earliest first, NULLs last)
+            project_high_priority.sort(key=lambda t: (t.due_date is None, t.due_date or date.max))
         else:
             project_high_priority = []
         
         # Due soon tasks (limit 5, ordered by due_date ascending)
+        # Only show tasks due today or in the future, not past due dates
+        today = date.today()
         if accessible_project_ids:
             due_soon_query = self.db.query(Task).filter(
                 or_(
                     and_(Task.project_id.is_(None), Task.user_id == user_id),
                     Task.project_id.in_(accessible_project_ids)
                 ),
-                Task.due_date.isnot(None)
+                Task.due_date.isnot(None),
+                Task.due_date >= today
             ).order_by(Task.due_date.asc()).limit(5)
         else:
             due_soon_query = self.db.query(Task).filter(
                 Task.project_id.is_(None),
                 Task.user_id == user_id,
-                Task.due_date.isnot(None)
+                Task.due_date.isnot(None),
+                Task.due_date >= today
             ).order_by(Task.due_date.asc()).limit(5)
         
         due_soon_tasks = due_soon_query.all()
@@ -266,3 +311,57 @@ class ComplexUIController:
                 inProgress=task_performance_in_progress
             )
         )
+
+    def get_sidebar_data(self, token: str) -> SidebarDataResponse:
+        """Get sidebar data counts for the authenticated user."""
+        user_id = self._authenticate_user(token)
+        
+        # Get user email for checking invitations
+        user = self.db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise ValueError("User not found")
+        
+        # General tasks: count personal tasks (project_id is null)
+        # Not group project tasks, not personal project tasks - just standalone personal tasks
+        personal_tasks_count = (
+            self.db.query(Task)
+            .filter(
+                Task.project_id.is_(None),
+                Task.user_id == user_id
+            )
+            .count()
+        )
+        
+        # General invitations: count pending invites for user's email
+        pending_invitations_count = (
+            self.db.query(ProjectInvite)
+            .filter(
+                ProjectInvite.email == user.email,
+                ProjectInvite.status == InviteStatus.pending
+            )
+            .count()
+        )
+        
+        # Projects: count total accessible projects (both personal and group)
+        accessible_project_ids = self._get_user_accessible_projects(user_id)
+        projects_count = len(accessible_project_ids)
+        
+        # Settings notification: return 0 for now
+        notification_count = 0
+        
+        return SidebarDataResponse(
+            general=GeneralData(
+                tasks=personal_tasks_count,
+                invitations=pending_invitations_count
+            ),
+            projects=ProjectsData(
+                projects=projects_count
+            ),
+            settings=SettingsData(
+                notification=notification_count
+            )
+        )
+
+    def get_sidebar_data_count(self, token: str):
+        """Alias for get_sidebar_data for backward compatibility."""
+        return self.get_sidebar_data(token)
